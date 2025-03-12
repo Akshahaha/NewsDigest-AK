@@ -1,5 +1,5 @@
 // functions/news.js (or news.ts)
-const axios = require("axios"); // or import axios from 'axios' if using ES modules
+import axios from "axios"; // or import axios from 'axios' if using ES modules
 
 exports.handler = async function () {
   try {
