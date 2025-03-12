@@ -31,139 +31,129 @@ const getSimpleSentiment = (text: string): string => {
 export function NewsFeed() {
   const [articles, setArticles] = useState<Article[]>([]);
 
-  useEffect(() => {
-    const fetchAndProcessNews = async () => {
-      try {
-        if (!NEWS_API_KEY) {
-          console.warn("Skipping news fetch due to missing NEWS_API_KEY.");
-          return;
-        }
+ useEffect(() => {
+   const fetchAndProcessNews = async () => {
+     try {
+       // Call the Netlify function
+       const response = await axios.get("/.netlify/functions/news");
 
-      const newsResponse = await axios.get(
-        `https://newsapi.org/v2/everything?q=technology&apiKey=${NEWS_API_KEY}`,
-        {
-          headers: {
-        
-            Accept: "application/json",
-          },
-        }
-      );
+       const rawArticles = response.data.articles;
+       const processedArticles = await Promise.all(
+         rawArticles.map(async (item: any) => {
+           try {
+             const articleData = {
+               id: item.url,
+               title: item.title,
+               source: item.source.name,
+               url: item.url,
+               published_at: new Date(item.publishedAt).toISOString(),
+               raw_content: item.content || item.description || "",
+               imageUrl: item.urlToImage || "",
+             };
 
+             let summary = articleData.raw_content;
+             let sentiment = "neutral";
+             let sentiment_explanation =
+               "Sentiment based on AI analysis: neutral";
 
-        const rawArticles = newsResponse.data.articles;
-const processedArticles = await Promise.all(
-  rawArticles.map(async (item: any) => {
-    try {
-      const articleData = {
-        id: item.url,
-        title: item.title,
-        source: item.source.name,
-        url: item.url,
-        published_at: new Date(item.publishedAt).toISOString(),
-        raw_content: item.content || item.description || "",
-        imageUrl: item.urlToImage || "",
-      };
+             if (OPENROUTER_API_KEY) {
+               try {
+                 const openRouterResponse = await axios.post(
+                   "https://openrouter.ai/api/v1/chat/completions",
+                   {
+                     model: "meta-llama/llama-3-8b-instruct",
+                     messages: [
+                       {
+                         role: "user",
+                         content: `Summarize this article and analyze its sentiment (positive, negative, or neutral):\n${
+                           item.description || item.title
+                         }\n\nReturn in this format:\nSummary: [summary text]\nSentiment: [positive/negative/neutral]`,
+                       },
+                     ],
+                   },
+                   {
+                     headers: {
+                       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+                       "Content-Type": "application/json",
+                     },
+                   }
+                 );
 
-      let summary = articleData.raw_content;
-      let sentiment = "neutral";
-      let sentiment_explanation = "Sentiment based on AI analysis: neutral";
+                 console.log(
+                   "Full OpenRouter Response:",
+                   JSON.stringify(openRouterResponse.data, null, 2)
+                 );
 
-      if (OPENROUTER_API_KEY) {
-        try {
-          const openRouterResponse = await axios.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            {
-              model: "meta-llama/llama-3-8b-instruct",
-              messages: [
-                {
-                  role: "user",
-                  content: `Summarize this article and analyze its sentiment (positive, negative, or neutral):\n${
-                    item.description || item.title
-                  }\n\nReturn in this format:\nSummary: [summary text]\nSentiment: [positive/negative/neutral]`,
-                },
-              ],
-            },
-            {
-              headers: {
-                Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-                "Content-Type": "application/json",
-              },
-            }
-          );
+                 const content =
+                   openRouterResponse?.data?.choices?.[0]?.message?.content ||
+                   openRouterResponse?.data?.content ||
+                   openRouterResponse?.data?.text ||
+                   "No content available";
+                 console.log("Extracted Content:", content);
 
-          console.log(
-            "Full OpenRouter Response:",
-            JSON.stringify(openRouterResponse.data, null, 2)
-          );
+                 if (content !== "No content available") {
+                   const lines = content.split("\n").filter(Boolean);
+                   const rawSummary =
+                     lines
+                       .find((line: string) => line.startsWith("Summary:"))
+                       ?.replace(/Summary: /gi, "") || articleData.raw_content;
+                   const rawSentiment =
+                     lines
+                       .find((line: string) => line.startsWith("Sentiment:"))
+                       ?.replace(/Sentiment: /gi, "")
+                       ?.toLowerCase() || "neutral";
 
-          const content =
-            openRouterResponse?.data?.choices?.[0]?.message?.content ||
-            openRouterResponse?.data?.content ||
-            openRouterResponse?.data?.text ||
-            "No content available";
-          console.log("Extracted Content:", content);
+                   summary = rawSummary;
+                   sentiment = ["positive", "negative", "neutral"].includes(
+                     rawSentiment
+                   )
+                     ? rawSentiment
+                     : "neutral";
+                   sentiment_explanation = `Sentiment based on AI analysis: ${sentiment}`;
+                 } else {
+                   sentiment = getSimpleSentiment(
+                     item.description || item.title
+                   );
+                   sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
+                 }
+               } catch (openRouterError: any) {
+                 console.error(
+                   "OpenRouter Error:",
+                   openRouterError.response?.data || openRouterError.message
+                 );
+                 sentiment = getSimpleSentiment(item.description || item.title);
+                 sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
+               }
+             } else {
+               sentiment = getSimpleSentiment(item.description || item.title);
+               sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
+             }
 
-          if (content !== "No content available") {
-            const lines = content.split("\n").filter(Boolean);
-            const rawSummary =
-              lines
-                .find((line: string) => line.startsWith("Summary:"))
-                ?.replace(/Summary: /gi, "") || articleData.raw_content;
-            const rawSentiment =
-              lines
-                .find((line: string) => line.startsWith("Sentiment:"))
-                ?.replace(/Sentiment: /gi, "")
-                ?.toLowerCase() || "neutral";
+             return {
+               id: articleData.id,
+               title: articleData.title,
+               source: articleData.source,
+               summary: summary,
+               sentiment: sentiment,
+               sentiment_explanation: sentiment_explanation,
+               url: articleData.url,
+               imageUrl: articleData.imageUrl,
+             };
+           } catch (innerError) {
+             console.error("Error processing single article:", innerError);
+             return null;
+           }
+         })
+       );
 
-            summary = rawSummary;
-            sentiment = ["positive", "negative", "neutral"].includes(
-              rawSentiment
-            )
-              ? rawSentiment
-              : "neutral";
-            sentiment_explanation = `Sentiment based on AI analysis: ${sentiment}`;
-          } else {
-            sentiment = getSimpleSentiment(item.description || item.title);
-            sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
-          }
-        } catch (openRouterError: any) {
-          console.error(
-            "OpenRouter Error:",
-            openRouterError.response?.data || openRouterError.message
-          );
-          sentiment = getSimpleSentiment(item.description || item.title);
-          sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
-        }
-      } else {
-        sentiment = getSimpleSentiment(item.description || item.title);
-        sentiment_explanation = `Sentiment based on keyword analysis: ${sentiment}`;
-      }
+       setArticles(processedArticles.filter(Boolean));
+     } catch (error) {
+       console.error("Error processing news:", error);
+     }
+   };
 
-      return {
-        id: articleData.id,
-        title: articleData.title,
-        source: articleData.source,
-        summary: summary,
-        sentiment: sentiment,
-        sentiment_explanation: sentiment_explanation,
-        url: articleData.url,
-        imageUrl: articleData.imageUrl,
-      };
-    } catch (innerError) {
-      console.error("Error processing single article:", innerError);
-      return null;
-    }
-  })
-);
-
-        setArticles(processedArticles.filter(Boolean));
-      } catch (error) {
-        console.error("Error processing news:", error);
-      }
-    };
-
-    fetchAndProcessNews();
-  }, []);
+   fetchAndProcessNews();
+ }, []);
 
   return (
     <div className='max-w-4xl mx-auto py-8 px-4'>
